@@ -71,7 +71,7 @@ class PositionManager:
             if paper_trade:
                 # Handle paper trading position updates
                 # Simplified version without actual API calls
-                return self.update_paper_positions(risk_params,trade_executor)
+                return self.update_paper_positions(risk_params, trade_executor)
             
             # Get open orders
             try:
@@ -79,7 +79,7 @@ class PositionManager:
                 open_order_ids = {order['orderId'] for order in open_orders}
             except Exception as e:
                 logger.warning(f"Failed to get open orders: {e}")
-                return 0, []
+                return [], []  # ← FIXED: Return empty lists instead of (0, [])
             
             # Check each position
             closed_trade_ids = []
@@ -182,11 +182,13 @@ class PositionManager:
             for trade_id in closed_trade_ids:
                 self.remove_position(trade_id)
             
-            return len(closed_trade_ids), updated_positions
+            # FIXED: Return lists of closed positions instead of counts
+            closed_positions = [self.get_position(trade_id) for trade_id in closed_trade_ids if self.get_position(trade_id)]
+            return closed_positions, updated_positions
             
         except Exception as e:
             logger.error(f"Error updating positions: {e}")
-            return 0, []
+            return [], []  # ← FIXED: Return empty lists instead of (0, [])
     
     def update_paper_positions(self, risk_params=None, trade_executor=None):
         """Update paper trading positions and check for exit conditions"""
@@ -196,7 +198,7 @@ class PositionManager:
             # We need the trade_executor to get current prices
             if trade_executor is None:
                 logger.warning("Trade executor not provided, cannot check exit conditions")
-                return 0, []
+                return [], []  # ← FIXED: Return empty lists instead of (0, [])
             
             # Track closed positions
             closed_trade_ids = []
@@ -336,11 +338,13 @@ class PositionManager:
             for trade_id in closed_trade_ids:
                 self.remove_position(trade_id, paper_trade=True)
             
-            return len(closed_trade_ids), updated_positions
+            # FIXED: Return lists of closed positions instead of counts
+            closed_positions = [position for position in updated_positions if position.get('exit_reason')]
+            return closed_positions, updated_positions
             
         except Exception as e:
             logger.error(f"Error updating paper positions: {e}")
-            return 0, []
+            return [], []  # ← FIXED: Return empty lists instead of (0, [])
     
     def get_position(self, trade_id, paper_trade=False):
         """Get a specific position"""

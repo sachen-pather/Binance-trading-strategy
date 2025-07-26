@@ -2,14 +2,34 @@
 Configuration module for trading strategy parameters and constants.
 """
 
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# BINANCE API CONFIGURATION - Load from environment variables
+BINANCE_CONFIG = {
+    'api_key': os.getenv('BINANCE_API_KEY'),
+    'api_secret': os.getenv('BINANCE_SECRET_KEY'),
+    'testnet': False,  # Set to False for live trading
+    'base_url': 'https://api.binance.com'
+}
+
+# Validate that API keys are loaded
+if not BINANCE_CONFIG['api_key'] or not BINANCE_CONFIG['api_secret']:
+    raise ValueError("API keys not found! Make sure your .env file contains BINANCE_API_KEY and BINANCE_SECRET_KEY")
+
 # Risk management parameters - EXTREMELY AGGRESSIVE BUYING
 RISK_PARAMS = {
-    'base_position_size': 0.3,    # Even larger position size for buying
-    'max_position_size': 0.5,     # 50% maximum position size
-    'min_position_size': 0.1,     # 10% minimum for testing
+    'base_position_size': 0.05,      # Increase to 5% for larger orders
+    'max_position_size': 0.2,        # 20% max
+    'min_position_size': 0.01,       # 1% minimum 
+    'min_order_value_usdt': 5,      # Minimum 10 USDT per order
+    'force_minimum_orders': True,    # Always meet minimum requirements
     'stop_loss_pct': 0.03,      # Very wide stop loss to hold positions
     'take_profit_pct': 0.05,    # Wider take profit for bigger gains
-    'max_daily_loss': 0.8,        # 80% maximum daily loss (almost disabled)
+    'max_daily_loss': 0.1,        # 80% maximum daily loss (almost disabled)
     'max_open_positions': 20,     # Allow many concurrent buy positions
     'win_rate': 0.4,
     'win_loss_ratio': 1.5,        

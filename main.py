@@ -8,6 +8,7 @@ import json
 import asyncio
 import websockets
 import threading
+import os  # ADD THIS LINE
 import numpy as np
 from datetime import datetime
 from trading_strategy import TradingStrategy
@@ -21,6 +22,33 @@ websocket_event_loop = None
 websocket_server = None
 connected_clients = set()
 
+def test_config():
+    """Test if configuration is loaded properly"""
+    try:
+        from config import BINANCE_CONFIG
+        print("=== API CONFIGURATION TEST ===")
+        print(f"API Key loaded: {'✅' if BINANCE_CONFIG['api_key'] else '❌'}")
+        print(f"Secret Key loaded: {'✅' if BINANCE_CONFIG['api_secret'] else '❌'}")
+        
+        if BINANCE_CONFIG['api_key']:
+            print(f"API Key starts with: {BINANCE_CONFIG['api_key'][:8]}...")
+        else:
+            print("❌ No API key found!")
+            
+        if BINANCE_CONFIG['api_secret']:
+            print(f"Secret Key starts with: {BINANCE_CONFIG['api_secret'][:8]}...")
+        else:
+            print("❌ No secret key found!")
+            
+        print(f"Testnet mode: {BINANCE_CONFIG.get('testnet', 'Not set')}")
+        print(f"Base URL: {BINANCE_CONFIG.get('base_url', 'Not set')}")
+        print("================================")
+        
+        return BINANCE_CONFIG['api_key'] and BINANCE_CONFIG['api_secret']
+    except Exception as e:
+        print(f"❌ Error loading config: {e}")
+        return False
+    
 # Create a custom JSON encoder that handles NumPy types
 class NumpyEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -270,7 +298,13 @@ def display_balance_report(strategy, paper_trade=True):
     print("\n=== ACCOUNT BALANCE REPORT ===")
     
     # Get current equity
-    equity = strategy.total_equity
+    if paper_trade:
+        equity = strategy.total_equity
+    else:
+        # For live trading, always get fresh equity from API
+        equity = strategy.data_fetcher.get_account_equity(paper_trade=False)
+        strategy.total_equity = equity  # Update the strategy equity
+        strategy.initial_equity = equity  # Reset initial equity for live trading
     
     # Get open positions
     positions = strategy.position_manager.get_all_positions(paper_trade=paper_trade)
@@ -368,18 +402,74 @@ def main():
     # Setup logging
     setup_logging(ENV_CONFIG['log_file'])
     
+    # Test configuration
+    print("Testing configuration...")
+    if not test_config():
+        print("❌ Configuration test failed! Please check your .env file and config.py")
+        return
+    
     # Start WebSocket server in a separate thread
     ws_thread = start_websocket_server()
     
     # Wait briefly to ensure the server has time to start
     time.sleep(2)
     
-    # Create strategy instance with live data but paper trades
+    # Paper trading flag
+    paper_trade = False  # Set to True for paper trading, False for live trading
+    
+    # RESET FOR LIVE TRADING - BEFORE STRATEGY INITIALIZATION
+    if not paper_trade:
+        print("🔄 Initializing fresh live trading session...")
+        
+        # Remove any existing state files BEFORE creating strategy
+        state_files_to_remove = [
+            ENV_CONFIG['state_file'],
+            'trading_model.pkl'
+        ]
+        
+        for file_path in state_files_to_remove:
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    print(f"✅ Removed old file: {file_path}")
+                except:
+                    print(f"⚠️ Could not remove: {file_path}")
+        
+        print("🚀 Starting with clean live trading state...")
+    
+    # NOW create strategy instance with live data
     strategy = TradingStrategy(test_mode=False)  # Live data
     
-    # Paper trading flag
-    paper_trade = True  # Set to False when ready for live trading
+    # ADDITIONAL RESET AFTER STRATEGY CREATION
+    if not paper_trade:
+        print("🔧 Resetting strategy components for live trading...")
+        
+        # Get real equity and force reset
+        real_equity = strategy.data_fetcher.get_account_equity(paper_trade=False)
+        strategy.total_equity = real_equity
+        strategy.initial_equity = real_equity
+        
+        # Reset performance tracker with real equity
+        from performance_tracker import PerformanceTracker
+        from exit_analytics import ExitAnalytics
+        
+        strategy.performance_tracker = PerformanceTracker(real_equity)
+        strategy.performance_tracker.daily_pnl = 0
+        
+        # Reset exit analytics
+        strategy.exit_analytics = ExitAnalytics()
+        
+        # Clear any old positions
+        strategy.position_manager.positions = {}
+        strategy.position_manager.closed_positions = []
+        strategy.position_manager.paper_positions = {}
+        strategy.position_manager.paper_closed_positions = []
+        
+        print(f"✅ Complete reset. Live equity: {real_equity:.2f} USDT")
     
+    # Create strategy instance with live data but paper trades
+    strategy = TradingStrategy(test_mode=False)  # Live data
+        
     # Fix: Disable circuit breaker for testing
     strategy.market_analyzer.circuit_breaker['active'] = False
     strategy.market_analyzer.circuit_breaker['manually_disabled'] = True  # Prevent re-enabling

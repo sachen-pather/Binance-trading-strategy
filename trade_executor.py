@@ -20,16 +20,199 @@ class TradeExecutor:
         self.paper_trades = []  # Store history of paper trades
         self.paper_orders = {}  # Store paper orders by symbol
         
+    def get_minimum_notional(self, symbol):
+        """Get minimum notional value for a symbol"""
+        try:
+            # Try to get from exchange info
+            if hasattr(self, '_symbol_info_cache'):
+                info = self._symbol_info_cache.get(symbol)
+            else:
+                self._symbol_info_cache = {}
+                info = None
+            
+            if not info:
+                try:
+                    exchange_info = self.client.get_exchange_info()
+                    for s in exchange_info['symbols']:
+                        if s['symbol'] == symbol:
+                            info = s
+                            self._symbol_info_cache[symbol] = info
+                            break
+                except:
+                    info = None
+            
+            if info:
+                # Find MIN_NOTIONAL filter
+                for filter_item in info.get('filters', []):
+                    if filter_item['filterType'] == 'MIN_NOTIONAL':
+                        return float(filter_item['minNotional'])
+                    elif filter_item['filterType'] == 'NOTIONAL':
+                        return float(filter_item['minNotional'])
+            
+            # Fallback minimum values by quote asset
+            if 'USDT' in symbol:
+                return 10.0  # 10 USDT minimum
+            elif 'BTC' in symbol:
+                return 0.0001  # 0.0001 BTC minimum
+            else:
+                return 10.0  # Default 10 USDT
+                
+        except Exception as e:
+            logger.error(f"Error getting minimum notional for {symbol}: {e}")
+            return 10.0  # Safe fallback
+
+    def adjust_quantity_for_minimum(self, symbol, quantity, price):
+        """Adjust quantity to meet minimum notional requirements"""
+        try:
+            min_notional = self.get_minimum_notional(symbol)
+            current_value = quantity * price
+            
+            logger.info(f"Order check for {symbol}: Value={current_value:.2f}, Min required={min_notional:.2f}")
+            
+            if current_value < min_notional:
+                # Calculate new quantity to meet minimum
+                required_quantity = min_notional / price
+                
+                # Add 5% buffer to ensure we're above minimum
+                adjusted_quantity = required_quantity * 1.05
+                
+                # Format to correct precision
+                adjusted_quantity = self.format_quantity(symbol, adjusted_quantity)
+                
+                logger.info(f"Adjusted quantity for {symbol}: {quantity:.6f} -> {adjusted_quantity:.6f} (Value: {adjusted_quantity * price:.2f} USDT)")
+                
+                return adjusted_quantity
+            
+            return quantity
+            
+        except Exception as e:
+            logger.error(f"Error adjusting quantity for {symbol}: {e}")
+            return quantity
+        
+    def format_quantity(self, symbol, quantity):
+        """Format quantity to correct precision for the symbol"""
+        try:
+            # Get exchange info for precise formatting
+            if hasattr(self, '_symbol_info_cache'):
+                info = self._symbol_info_cache.get(symbol)
+            else:
+                self._symbol_info_cache = {}
+                info = None
+            
+            if not info:
+                try:
+                    exchange_info = self.client.get_exchange_info()
+                    for s in exchange_info['symbols']:
+                        if s['symbol'] == symbol:
+                            info = s
+                            self._symbol_info_cache[symbol] = info
+                            break
+                except:
+                    info = None
+            
+            if info:
+                # Find the LOT_SIZE filter for precise quantity formatting
+                for filter_item in info.get('filters', []):
+                    if filter_item['filterType'] == 'LOT_SIZE':
+                        step_size = float(filter_item['stepSize'])
+                        
+                        # Calculate precision based on step size
+                        if step_size >= 1:
+                            precision = 0
+                        else:
+                            precision = len(str(step_size).split('.')[-1].rstrip('0'))
+                        
+                        # Round to the correct precision
+                        formatted_quantity = round(quantity, precision)
+                        logger.info(f"Formatted quantity for {symbol}: {quantity} -> {formatted_quantity} (precision: {precision})")
+                        return formatted_quantity
+            
+            # Fallback precision rules if exchange info not available
+            if 'BTC' in symbol or 'ETH' in symbol:
+                return round(quantity, 6)  # High precision for major coins
+            elif 'BNB' in symbol or 'ADA' in symbol or 'DOT' in symbol:
+                return round(quantity, 2)  # Medium precision
+            else:
+                return round(quantity, 3)  # Default precision
+                
+        except Exception as e:
+            logger.error(f"Error formatting quantity for {symbol}: {e}")
+            # Safe fallback
+            return round(quantity, 3)
+    
+    def format_price(self, symbol, price):
+        """Format price to correct precision for the symbol"""
+        try:
+            # Get exchange info for precise formatting
+            if hasattr(self, '_symbol_info_cache'):
+                info = self._symbol_info_cache.get(symbol)
+            else:
+                self._symbol_info_cache = {}
+                info = None
+            
+            if not info:
+                try:
+                    exchange_info = self.client.get_exchange_info()
+                    for s in exchange_info['symbols']:
+                        if s['symbol'] == symbol:
+                            info = s
+                            self._symbol_info_cache[symbol] = info
+                            break
+                except:
+                    info = None
+            
+            if info:
+                # Find the PRICE_FILTER for precise price formatting
+                for filter_item in info.get('filters', []):
+                    if filter_item['filterType'] == 'PRICE_FILTER':
+                        tick_size = float(filter_item['tickSize'])
+                        
+                        # Calculate precision based on tick size
+                        if tick_size >= 1:
+                            precision = 0
+                        else:
+                            precision = len(str(tick_size).split('.')[-1].rstrip('0'))
+                        
+                        # Round to the correct precision
+                        return round(price, precision)
+            
+            # Fallback precision rules
+            if price > 1000:
+                return round(price, 2)  # High value coins
+            elif price > 1:
+                return round(price, 4)  # Medium value coins
+            else:
+                return round(price, 8)  # Low value coins
+                
+        except Exception as e:
+            logger.error(f"Error formatting price for {symbol}: {e}")
+            return round(price, 4)  # Safe fallback
+        
     def execute_trade(self, symbol, side, quantity, risk_manager, data_fetcher, 
                      indicator_calculator, market_state, order_type='MARKET', 
                      paper_trade=True):
         """Execute trade with comprehensive risk management and paper trading option"""
         try:
-            # Get current price - use method that handles paper trading mode
+            # Get current price
             current_price = self.get_current_price(symbol, paper_trade)
             if current_price is None:
                 logger.error(f"Failed to get current price for {symbol}")
                 return None
+            
+            # Format quantity to correct precision FIRST
+            quantity = self.format_quantity(symbol, quantity)
+            
+            # THEN adjust for minimum notional requirements
+            if not paper_trade:
+                quantity = self.adjust_quantity_for_minimum(symbol, quantity, current_price)
+                
+                # Final check - if still too small, skip the trade
+                min_notional = self.get_minimum_notional(symbol)
+                final_value = quantity * current_price
+                
+                if final_value < min_notional:
+                    logger.warning(f"Cannot place order for {symbol}: Final value {final_value:.2f} still below minimum {min_notional:.2f}")
+                    return None
             
             # Calculate stop loss and take profit levels
             df = data_fetcher.get_historical_data(symbol, interval='1h', lookback='3 days')
@@ -38,6 +221,10 @@ class TradeExecutor:
             stop_loss, take_profit = risk_manager.calculate_stop_loss_take_profit(
                 symbol, side, current_price, market_state, df
             )
+            
+            # Format prices to correct precision
+            stop_loss = self.format_price(symbol, stop_loss)
+            take_profit = self.format_price(symbol, take_profit)
             
             # Prepare trade details
             trade_id = f"{symbol}_{side}_{int(time.time())}"
@@ -98,14 +285,16 @@ class TradeExecutor:
                 
             else:
                 # REAL TRADE: Use actual order endpoint
-                try:    
+                try:
+                    logger.info(f"Placing LIVE order: {side} {quantity} {symbol} at market price (Value: {quantity * current_price:.2f} USDT)")
+                    
                     order = self.client.create_order(
                         symbol=symbol,
                         side=side,
                         type=Client.ORDER_TYPE_MARKET,
                         quantity=quantity
                     )
-                    logger.info(f"Market order placed: {side} {quantity} {symbol}")
+                    logger.info(f"✅ LIVE Market order placed: {side} {quantity} {symbol}")
                     trade_info['orders']['main'] = order
                     
                     # Place stop loss order
@@ -120,7 +309,7 @@ class TradeExecutor:
                             stopPrice=stop_loss,
                             price=stop_loss
                         )
-                        logger.info(f"Stop loss order placed at {stop_loss}")
+                        logger.info(f"✅ LIVE Stop loss order placed at {stop_loss}")
                         trade_info['orders']['stop_loss'] = sl_order
                     except Exception as e:
                         logger.error(f"Error placing stop loss order: {e}")
@@ -136,13 +325,13 @@ class TradeExecutor:
                             quantity=quantity,
                             price=take_profit
                         )
-                        logger.info(f"Take profit order placed at {take_profit}")
+                        logger.info(f"✅ LIVE Take profit order placed at {take_profit}")
                         trade_info['orders']['take_profit'] = tp_order
                     except Exception as e:
                         logger.error(f"Error placing take profit order: {e}")
                 
                 except BinanceAPIException as e:
-                    logger.error(f"API error executing trade: {e}")
+                    logger.error(f"❌ API error executing trade: {e}")
                     return None
             
             return trade_info

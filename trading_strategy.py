@@ -100,6 +100,10 @@ class TradingStrategy:
                 trade_executor=self.trade_executor
             )
             
+            # Initialize variables first (FIXED)
+            paper_closed_trades = []
+            paper_updated_positions = []
+            
             # If paper trading, also update paper positions with proper dependencies
             if paper_trade:
                 paper_closed_trades, paper_updated_positions = self.position_manager.update_paper_positions(
